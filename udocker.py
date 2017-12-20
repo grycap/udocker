@@ -2152,22 +2152,22 @@ class PRootEngine(ExecutionEngineCommon):
         conf = Config()
         arch = conf.arch()
         if arch == "amd64":
-            if conf.oskernel_isgreater((4, 8, 0)):
+            if conf.oskernel_isgreater("4.8.0"):
                 image_list = ["proot-x86_64-4_8_0", "proot-x86_64", "proot"]
             else:
                 image_list = ["proot-x86_64", "proot"]
         elif arch == "i386":
-            if conf.oskernel_isgreater((4, 8, 0)):
+            if conf.oskernel_isgreater("4.8.0"):
                 image_list = ["proot-x86-4_8_0", "proot-x86", "proot"]
             else:
                 image_list = ["proot-x86", "proot"]
         elif arch == "arm64":
-            if conf.oskernel_isgreater((4, 8, 0)):
+            if conf.oskernel_isgreater("4.8.0"):
                 image_list = ["proot-arm64-4_8_0", "proot-arm64", "proot"]
             else:
                 image_list = ["proot-arm64", "proot"]
         elif arch == "arm":
-            if conf.oskernel_isgreater((4, 8, 0)):
+            if conf.oskernel_isgreater("4.8.0"):
                 image_list = ["proot-arm-4_8_0", "proot-arm", "proot"]
             else:
                 image_list = ["proot-arm", "proot"]
@@ -2176,7 +2176,7 @@ class PRootEngine(ExecutionEngineCommon):
         if not self.proot_exec:
             Msg().err("Error: proot executable not found")
             sys.exit(1)
-        if conf.oskernel_isgreater((4, 8, 0)):
+        if conf.oskernel_isgreater("4.8.0"):
             if conf.proot_noseccomp is not None:
                 self.proot_noseccomp = conf.proot_noseccomp
             if self.exec_mode.get_mode() == "P2":
@@ -3838,7 +3838,7 @@ class GetURLpyCurl(GetURL):
         if self.insecure:
             pyc.setopt(pyc.SSL_VERIFYPEER, 0)
             pyc.setopt(pyc.SSL_VERIFYHOST, 0)
-        pyc.setopt(pyc.FOLLOWLOCATION, True)
+#        pyc.setopt(pyc.FOLLOWLOCATION, True)
         pyc.setopt(pyc.FAILONERROR, False)
         pyc.setopt(pyc.NOPROGRESS, True)
         pyc.setopt(pyc.HEADERFUNCTION, hdr.write)
@@ -3866,7 +3866,8 @@ class GetURLpyCurl(GetURL):
         if "header" in kwargs:  # avoid known pycurl bug
             clean_header_list = []
             for header_item in kwargs["header"]:
-                clean_header_list.append(str(header_item))
+                if not str(header_item).startswith("Authorization: Bearer") or "redirected" not in kwargs:
+                    clean_header_list.append(str(header_item))
             pyc.setopt(pyc.HTTPHEADER, clean_header_list)
         if "v" in kwargs:
             pyc.setopt(pyc.VERBOSE, kwargs["v"])
@@ -3898,13 +3899,23 @@ class GetURLpyCurl(GetURL):
         """http get implementation using the PyCurl"""
         buf = StringIO()
         hdr = CurlHeader()
-        pyc = pycurl.Curl()
         url = str(args[0])
-        pyc.setopt(pycurl.URL, url)
-        self._set_defaults(pyc, hdr)
         try:
-            (output_file, filep) = self._mkpycurl(pyc, hdr, buf, **kwargs)
-            pyc.perform()
+            # Manually manage the redirection to solve #110 issue
+            status_code = 302
+            while status_code >= 300 and status_code <=308:
+                pyc = pycurl.Curl()
+                pyc.setopt(pycurl.URL, url)
+                self._set_defaults(pyc, hdr)
+                (output_file, filep) = self._mkpycurl(pyc, hdr, buf, **kwargs)
+                pyc.perform()
+                status_code = pyc.getinfo(pycurl.RESPONSE_CODE)
+                if status_code >= 300 and status_code <=308:
+                    url = hdr.data['location']
+                    kwargs['redirected'] = True
+                elif 'redirected' in kwargs:
+                    del kwargs['redirected']
+
         except(IOError, OSError):
             return(None, None)
         except pycurl.error as error:
