@@ -3866,6 +3866,7 @@ class GetURLpyCurl(GetURL):
         if "header" in kwargs:  # avoid known pycurl bug
             clean_header_list = []
             for header_item in kwargs["header"]:
+                # in case of redirection do not add the Authorization header
                 if not str(header_item).startswith("Authorization: Bearer") or "redirected" not in kwargs:
                     clean_header_list.append(str(header_item))
             pyc.setopt(pyc.HTTPHEADER, clean_header_list)
