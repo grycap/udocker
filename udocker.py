@@ -3975,7 +3975,7 @@ class GetURLexeCurl(GetURL):
             "timeout": "-m " + str(self.timeout),
 # Manually manage the redirection to solve #110 issue
 #            "other": "--max-redirs 10 -s -q -S -L "
-            "other": "--max-redirs 10 -s -q -S "
+            "other": "-s -q -S "
         }
         if self.insecure:
             self._opts["insecure"] = "-k"
