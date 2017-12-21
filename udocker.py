@@ -3838,7 +3838,8 @@ class GetURLpyCurl(GetURL):
         if self.insecure:
             pyc.setopt(pyc.SSL_VERIFYPEER, 0)
             pyc.setopt(pyc.SSL_VERIFYHOST, 0)
-#        pyc.setopt(pyc.FOLLOWLOCATION, True)
+        # Manually manage the redirection to solve #110 issue
+        # pyc.setopt(pyc.FOLLOWLOCATION, True)
         pyc.setopt(pyc.FAILONERROR, False)
         pyc.setopt(pyc.NOPROGRESS, True)
         pyc.setopt(pyc.HEADERFUNCTION, hdr.write)
@@ -3898,13 +3899,16 @@ class GetURLpyCurl(GetURL):
 
     def get(self, *args, **kwargs):
         """http get implementation using the PyCurl"""
-        buf = StringIO()
-        hdr = CurlHeader()
         url = str(args[0])
         try:
             # Manually manage the redirection to solve #110 issue
+            cont_redirs = 0
+            max_redirs = 10
             status_code = 302
-            while status_code >= 300 and status_code <=308:
+            while status_code >= 300 and status_code <=308 and cont_redirs < max_redirs:
+                cont_redirs += 1
+                buf = StringIO()
+                hdr = CurlHeader()
                 pyc = pycurl.Curl()
                 pyc.setopt(pycurl.URL, url)
                 self._set_defaults(pyc, hdr)
@@ -3913,6 +3917,7 @@ class GetURLpyCurl(GetURL):
                 status_code = pyc.getinfo(pycurl.RESPONSE_CODE)
                 if status_code >= 300 and status_code <=308:
                     url = hdr.data['location']
+                if "Signature=" in url:
                     kwargs['redirected'] = True
                 elif 'redirected' in kwargs:
                     del kwargs['redirected']
@@ -3968,7 +3973,9 @@ class GetURLexeCurl(GetURL):
             "resume": "",
             "ctimeout": "--connect-timeout " + str(self.ctimeout),
             "timeout": "-m " + str(self.timeout),
-            "other": "--max-redirs 10 -s -q -S -L "
+# Manually manage the redirection to solve #110 issue
+#            "other": "--max-redirs 10 -s -q -S -L "
+            "other": "--max-redirs 10 -s -q -S "
         }
         if self.insecure:
             self._opts["insecure"] = "-k"
@@ -3998,7 +4005,9 @@ class GetURLexeCurl(GetURL):
             self._opts["proxy"] = "--proxy '%s'" % (self.http_proxy)
         if "header" in kwargs:
             for header_item in kwargs["header"]:
-                self._opts["header"] += "-H '%s'" % (str(header_item))
+                # in case of Signature in the url do not add the Authorization header
+                if not str(header_item).startswith("Authorization: Bearer") or "Signature=" not in self._files["url"]:
+                    self._opts["header"] += "-H '%s'" % (str(header_item))
         if "v" in kwargs and kwargs["v"]:
             self._opts["verbose"] = "-v"
         if "nobody" in kwargs and kwargs["nobody"]:
@@ -4014,31 +4023,49 @@ class GetURLexeCurl(GetURL):
                (self._files["header_file"], self._files["output_file"],
                 self._files["error_file"], self._files["url"]))
 
+    def _get_status_code(self, status_line):
+        """
+        get http status code from http status line.
+        Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+        """
+        parts = status_line.split(" ")
+        return int(parts[1])
+
     def get(self, *args, **kwargs):
         """http get implementation using the curl cli executable"""
-        hdr = CurlHeader()
-        buf = StringIO()
-        self._set_defaults()
-        cmd = self._mkcurlcmd(*args, **kwargs)
-        status = subprocess.call(cmd, shell=True, close_fds=True)
-        hdr.setvalue_from_file(self._files["header_file"])
-        hdr.data["X-ND-CURLSTATUS"] = status
-        if status:
-            Msg().err("Error: in download: %s"
-                      % str(FileUtil(self._files["error_file"]).getdata()))
-            return(hdr, buf)
+        # Manually manage the redirection to solve #110 issue
+        cont_redirs = 0
+        max_redirs = 10
+        status_code = 302
+        while status_code >= 300 and status_code <=308 and cont_redirs < max_redirs:
+            cont_redirs += 1
+            hdr = CurlHeader()
+            buf = StringIO()
+            self._set_defaults()
+            cmd = self._mkcurlcmd(*args, **kwargs)
+            status = subprocess.call(cmd, shell=True, close_fds=True)
+            hdr.setvalue_from_file(self._files["header_file"])
+            hdr.data["X-ND-CURLSTATUS"] = status
+            if status:
+                Msg().err("Error: in download: %s"
+                          % str(FileUtil(self._files["error_file"]).getdata()))
+                return(hdr, buf)
+            status_code = self._get_status_code(hdr.data["X-ND-HTTPSTATUS"])
+            if status_code >= 300 and status_code <= 308:
+                args = (hdr.data['location'],)
+
         if "header" in kwargs:
             hdr.data["X-ND-HEADERS"] = kwargs["header"]
         if "ofile" in kwargs:
-            if " 401" in hdr.data["X-ND-HTTPSTATUS"]:  # needs authentication
+            if status_code == 401:  # needs authentication
                 pass
-            elif " 206" in hdr.data["X-ND-HTTPSTATUS"] and "resume" in kwargs:
+            elif status_code == 206 and "resume" in kwargs:
                 os.rename(self._files["output_file"], kwargs["ofile"])
-            elif " 416" in hdr.data["X-ND-HTTPSTATUS"]:
+            elif status_code == 416:
                 if "resume" in kwargs:
                     kwargs["resume"] = False
                 (hdr, buf) = self.get(self._files["url"], **kwargs)
-            elif " 200" not in hdr.data["X-ND-HTTPSTATUS"]:
+            elif status_code != 200:
                 Msg().err("Error: in download: ", str(
                     hdr.data["X-ND-HTTPSTATUS"]), ": ", str(status))
                 FileUtil(self._files["output_file"]).remove()
