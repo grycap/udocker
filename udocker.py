@@ -1609,7 +1609,7 @@ class ExecutionEngineCommon(object):
         if os.path.exists(mountpoint):
             return True
         if os.path.isfile(host_path):
-            status = FileUtil(mountpoint).putdata("")
+            status = FileUtil(mountpoint).putdata(b'')
         elif os.path.isdir(host_path):
             status = FileUtil(mountpoint).mkdir()
         return status
